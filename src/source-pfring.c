@@ -365,10 +365,9 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
             }
 
             /* Trigger one dump of stats every second */
-            TimeGet(&current_time);
-            if (current_time.tv_sec != last_dump) {
+            if (p->ts.tv_sec != last_dump) {
                 PfringDumpCounters(ptv);
-                last_dump = current_time.tv_sec;
+                last_dump = p->ts.tv_sec;
             }
         } else {
             SCLogError(SC_ERR_PF_RING_RECV,"pfring_recv error  %" PRId32 "", r);
