@@ -143,8 +143,6 @@ typedef struct PfringThreadVars_
     uint64_t bytes;
     uint64_t pkts;
 
-    int flags;
-
     uint16_t capture_kernel_packets;
     uint16_t capture_kernel_drops;
 
@@ -492,7 +490,6 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
     struct pfring_pkthdr hdr;
     TmSlot *s = (TmSlot *)slot;
     time_t last_dump = 0;
-    struct timeval current_time;
     u_int buffer_size;
     u_char *pkt_buffer;
 
@@ -766,8 +763,6 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, void *initdata, void **data)
             ptv->tv);
     ptv->capture_kernel_drops = StatsRegisterCounter("capture.kernel_drops",
             ptv->tv);
-
-    char *active_runmode = RunmodeGetActive();
 
     if (active_runmode && strcmp("workers", active_runmode) != 0)
         ptv->flags |= PFRING_RING_PROTECT; /* FIXX mutexes should be avoided */
