@@ -127,9 +127,9 @@ static SCMutex pfring_bpf_set_filter_lock = SCMUTEX_INITIALIZER;
 #define LIBPFRING_REENTRANT   0
 #define LIBPFRING_WAIT_FOR_INCOMING 1
 
-typedef enum {
-    PFRING_FLAGS_ZERO_COPY = 0x1
-} PfringThreadVarsFlags;
+/* PfringThreadVars flags */
+#define PFRING_FLAGS_ZERO_COPY (1 << 0)
+#define PFRING_FLAGS_BYPASS    (1 << 1)
 
 /**
  * \brief Structure to hold thread specific variables.
@@ -284,6 +284,64 @@ static inline void PfringProcessPacket(void *user, struct pfring_pkthdr *h, Pack
 }
 
 /**
+ * \brief Pfring bypass callback function
+ *
+ * \param p a Packet to use information from to trigger bypass
+ * \return 1 if bypass is successful, 0 if not
+ */
+static int PfringBypassCallback(Packet *p)
+{
+    SCLogDebug("Calling Pfring callback function");
+
+    /* Only bypass TCP and UDP */
+    if (!(PKT_IS_TCP(p) || PKT_IS_UDP(p))) {
+        return 0;
+    }
+
+    /* Bypassing tunneled packets is currently not supported */
+    if (IS_TUNNEL_PKT(p)) {
+        return 0;
+    }
+
+#if 1
+    pfring_anic_flow_filter(p->pfring_v.ptv->pd, 0, p->pfring_v.flow_id, 1);
+    return 1;
+#else
+    if (PKT_IS_IPV4(p)) {
+
+        //TODO
+
+        /* Available fields:
+         GET_IPV4_SRC_ADDR_U32(p);
+         GET_IPV4_DST_ADDR_U32(p);
+         htons(GET_TCP_SRC_PORT(p));
+         htons(GET_TCP_DST_PORT(p));
+         IPV4_GET_IPPROTO(p);
+         */
+
+        return 1;
+
+    } else if (PKT_IS_IPV6(p) && ((IPV6_GET_NH(p) == IPPROTO_TCP) || (IPV6_GET_NH(p) == IPPROTO_UDP))) {
+
+        //TODO
+
+        /* Available fields:
+
+        GET_IPV6_SRC_ADDR(p)[0..3];
+        GET_IPV6_DST_ADDR(p)[0..3];
+        htons(GET_TCP_SRC_PORT(p));
+        htons(GET_TCP_DST_PORT(p));
+        IPV6_GET_NH(p);
+        */
+
+        return 1;
+    }
+
+    return 0;
+#endif
+}
+
+/**
  * \brief Recieves packets from an interface via libpfring.
  *
  *  This function recieves packets from an interface and passes
@@ -306,6 +364,7 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
     time_t last_dump = 0;
     u_int buffer_size;
     u_char *pkt_buffer;
+    int r;
 
     ptv->slot = s->slot_next;
 
@@ -344,11 +403,33 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
             pkt_buffer = GET_PKT_DIRECT_DATA(p);
         }
 
-        int r = pfring_recv(ptv->pd, &pkt_buffer,
+        recv:
+        r = pfring_recv(ptv->pd, &pkt_buffer,
                 buffer_size,
                 &hdr,
                 LIBPFRING_WAIT_FOR_INCOMING);
         if (likely(r == 1)) {
+
+            if (ptv->flags & PFRING_FLAGS_BYPASS && hdr.len == PFRING_OFFLOAD_LEN) {
+                struct offload_descriptor_rx_packet_data *desc_p = (struct offload_descriptor_rx_packet_data *) pkt_buffer;
+
+                if (desc_p->type == 4) {
+                    struct offload_rx_type4_s *t4 = (struct offload_rx_type4_s *) desc_p;
+                    hdr.caplen -= sizeof(*t4);
+                    hdr.len = hdr.caplen;
+                    pkt_buffer = (u_char *) &t4[1];
+                    p->pfring_v.flow_id = t4->flowid;
+                    p->pfring_v.ptv = ptv;
+                    p->BypassPacketsFlow = PfringBypassCallback;
+                } else {
+                    /* This is not a raw packet, skip */
+                    if (suricata_ctl_flags & SURICATA_STOP) {
+                        SCReturnInt(TM_ECODE_OK);
+                    }
+                    goto recv;
+                }
+             }
+
             /* profiling started before blocking pfring_recv call, so
              * reset it here */
             PACKET_PROFILING_RESTART(p);
@@ -493,11 +574,20 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, const void *initdata, void **dat
         }
     }
 
+    if (pfconf->flags & PFRING_CONF_FLAGS_BYPASS) {
+#ifdef PF_RING_FLOW_OFFLOAD
+        SCLogInfo("Bypass is supported by this Pfring version");
+        opflag |= PF_RING_FLOW_OFFLOAD;
+        ptv->flags |= PFRING_FLAGS_BYPASS;
+#endif
+    }
+
     ptv->pd = pfring_open(ptv->interface, (uint32_t)default_packet_size, opflag);
     if (ptv->pd == NULL) {
-        SCLogError(SC_ERR_PF_RING_OPEN,"Failed to open %s: pfring_open error."
+        SCLogError(SC_ERR_PF_RING_OPEN,"Failed to open %s: pfring_open error (%d)."
                 " Check if %s exists and pf_ring module is loaded.",
                 ptv->interface,
+                errno,
                 ptv->interface);
         pfconf->DerefFunc(pfconf);
         SCFree(ptv);
