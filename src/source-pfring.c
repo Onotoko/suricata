@@ -283,6 +283,7 @@ static inline void PfringProcessPacket(void *user, struct pfring_pkthdr *h, Pack
     SET_PKT_LEN(p, h->caplen);
 }
 
+#ifdef PF_RING_FLOW_OFFLOAD
 /**
  * \brief Pfring bypass callback function
  *
@@ -291,6 +292,8 @@ static inline void PfringProcessPacket(void *user, struct pfring_pkthdr *h, Pack
  */
 static int PfringBypassCallback(Packet *p)
 {
+    hw_filtering_rule r;
+
     SCLogDebug("Calling Pfring callback function");
 
     /* Only bypass TCP and UDP */
@@ -303,43 +306,33 @@ static int PfringBypassCallback(Packet *p)
         return 0;
     }
 
-#if 1
-    pfring_anic_flow_filter(p->pfring_v.ptv->pd, 0, p->pfring_v.flow_id, 1);
-    return 1;
-#else
-    if (PKT_IS_IPV4(p)) {
+    /* Other available macros
+    PKT_IS_IPV4(p)
+    PKT_IS_IPV6(p)
+    GET_IPV4_SRC_ADDR_U32(p)
+    GET_IPV6_SRC_ADDR(p)[0..3]
+    GET_IPV4_DST_ADDR_U32(p)
+    GET_IPV6_DST_ADDR(p)[0..3]
+    GET_TCP_SRC_PORT(p) //nbo
+    GET_TCP_DST_PORT(p) //nbo
+    IPV4_GET_IPPROTO(p)
+    IPV6_GET_NH(p)
+    */
 
-        //TODO
+    SCLogInfo("Bypass callback called for flow %u", p->pfring_v.flow_id);
 
-        /* Available fields:
-         GET_IPV4_SRC_ADDR_U32(p);
-         GET_IPV4_DST_ADDR_U32(p);
-         htons(GET_TCP_SRC_PORT(p));
-         htons(GET_TCP_DST_PORT(p));
-         IPV4_GET_IPPROTO(p);
-         */
+    r.rule_family_type = accolade_flow_filter_rule;
+    r.rule_family.flow_rule.rule_type = flow_drop_rule;
+    r.rule_family.flow_rule.thread = 0;
+    r.rule_family.flow_rule.flow_id = p->pfring_v.flow_id;
 
-        return 1;
-
-    } else if (PKT_IS_IPV6(p) && ((IPV6_GET_NH(p) == IPPROTO_TCP) || (IPV6_GET_NH(p) == IPPROTO_UDP))) {
-
-        //TODO
-
-        /* Available fields:
-
-        GET_IPV6_SRC_ADDR(p)[0..3];
-        GET_IPV6_DST_ADDR(p)[0..3];
-        htons(GET_TCP_SRC_PORT(p));
-        htons(GET_TCP_DST_PORT(p));
-        IPV6_GET_NH(p);
-        */
-
-        return 1;
+    if (pfring_add_hw_rule(p->pfring_v.ptv->pd, &r) < 0) {
+      return 0;
     }
 
-    return 0;
-#endif
+    return 1;
 }
+#endif
 
 /**
  * \brief Recieves packets from an interface via libpfring.
@@ -403,32 +396,20 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
             pkt_buffer = GET_PKT_DIRECT_DATA(p);
         }
 
-        recv:
         r = pfring_recv(ptv->pd, &pkt_buffer,
                 buffer_size,
                 &hdr,
                 LIBPFRING_WAIT_FOR_INCOMING);
         if (likely(r == 1)) {
 
-            if (ptv->flags & PFRING_FLAGS_BYPASS && hdr.len == PFRING_OFFLOAD_LEN) {
-                struct offload_descriptor_rx_packet_data *desc_p = (struct offload_descriptor_rx_packet_data *) pkt_buffer;
-
-                if (desc_p->type == 4) {
-                    struct offload_rx_type4_s *t4 = (struct offload_rx_type4_s *) desc_p;
-                    hdr.caplen -= sizeof(*t4);
-                    hdr.len = hdr.caplen;
-                    pkt_buffer = (u_char *) &t4[1];
-                    p->pfring_v.flow_id = t4->flowid;
-                    p->pfring_v.ptv = ptv;
-                    p->BypassPacketsFlow = PfringBypassCallback;
-                } else {
-                    /* This is not a raw packet, skip */
-                    if (suricata_ctl_flags & SURICATA_STOP) {
-                        SCReturnInt(TM_ECODE_OK);
-                    }
-                    goto recv;
-                }
+#ifdef PF_RING_FLOW_OFFLOAD
+            if (ptv->flags & PFRING_FLAGS_BYPASS) {
+                p->pfring_v.flow_id = hdr.extended_hdr.pkt_hash; /* pkt hash contains the flow id in this configuration */
+                p->pfring_v.ptv = ptv;
+                p->BypassPacketsFlow = PfringBypassCallback;
+                SCLogInfo("Bypass callback set for flow %u", p->pfring_v.flow_id);
              }
+#endif
 
             /* profiling started before blocking pfring_recv call, so
              * reset it here */
@@ -577,8 +558,10 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, const void *initdata, void **dat
     if (pfconf->flags & PFRING_CONF_FLAGS_BYPASS) {
 #ifdef PF_RING_FLOW_OFFLOAD
         SCLogInfo("Bypass is supported by this Pfring version");
-        opflag |= PF_RING_FLOW_OFFLOAD;
+        opflag |= PF_RING_FLOW_OFFLOAD | PF_RING_FLOW_OFFLOAD_NOUP;
         ptv->flags |= PFRING_FLAGS_BYPASS;
+#else
+        SCLogInfo("Bypass is not supported by this Pfring version, please upgrade");
 #endif
     }
 
