@@ -306,27 +306,13 @@ static int PfringBypassCallback(Packet *p)
         return 0;
     }
 
-    /* Other available macros
-    PKT_IS_IPV4(p)
-    PKT_IS_IPV6(p)
-    GET_IPV4_SRC_ADDR_U32(p)
-    GET_IPV6_SRC_ADDR(p)[0..3]
-    GET_IPV4_DST_ADDR_U32(p)
-    GET_IPV6_DST_ADDR(p)[0..3]
-    GET_TCP_SRC_PORT(p) //nbo
-    GET_TCP_DST_PORT(p) //nbo
-    IPV4_GET_IPPROTO(p)
-    IPV6_GET_NH(p)
-    */
-
-    SCLogInfo("Bypass callback called for flow %u", p->pfring_v.flow_id);
-
     r.rule_family_type = accolade_flow_filter_rule;
     r.rule_family.flow_rule.rule_type = flow_drop_rule;
     r.rule_family.flow_rule.thread = 0;
     r.rule_family.flow_rule.flow_id = p->pfring_v.flow_id;
 
     if (pfring_add_hw_rule(p->pfring_v.ptv->pd, &r) < 0) {
+      SCLogInfo("Bypass set for flow ID = %u", p->pfring_v.flow_id);
       return 0;
     }
 
@@ -407,8 +393,7 @@ TmEcode ReceivePfringLoop(ThreadVars *tv, void *data, void *slot)
                 p->pfring_v.flow_id = hdr.extended_hdr.pkt_hash; /* pkt hash contains the flow id in this configuration */
                 p->pfring_v.ptv = ptv;
                 p->BypassPacketsFlow = PfringBypassCallback;
-                SCLogInfo("Bypass callback set for flow %u", p->pfring_v.flow_id);
-             }
+            }
 #endif
 
             /* profiling started before blocking pfring_recv call, so
