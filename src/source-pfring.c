@@ -142,6 +142,7 @@ typedef struct PfringThreadVars_
     /* counters */
     uint64_t bytes;
     uint64_t pkts;
+    uint64_t shunt_pkts;
 
     uint16_t capture_kernel_packets;
     uint16_t capture_kernel_drops;
@@ -213,6 +214,7 @@ static inline void PfringDumpCounters(PfringThreadVars *ptv)
         SC_ATOMIC_ADD(ptv->livedev->drop, pfring_s.drop - th_drops);
         StatsSetUI64(ptv->tv, ptv->capture_kernel_packets, pfring_s.recv);
         StatsSetUI64(ptv->tv, ptv->capture_kernel_drops, pfring_s.drop);
+        ptv->shunt_pkts = pfring_s.shunt;
     }
 }
 
@@ -671,6 +673,11 @@ void ReceivePfringThreadExitStats(ThreadVars *tv, void *data)
             StatsGetLocalCounterValue(tv, ptv->capture_kernel_packets),
             StatsGetLocalCounterValue(tv, ptv->capture_kernel_drops));
     SCLogPerf("(%s) Packets %" PRIu64 ", bytes %" PRIu64 "", tv->name, ptv->pkts, ptv->bytes);
+#ifdef PF_RING_FLOW_OFFLOAD
+    if (ptv->flags & PFRING_FLAGS_BYPASS) {
+      SCLogPerf("(%s) Offload: Packets %" PRIu64 "", tv->name, ptv->shunt_pkts);
+    }
+#endif
 }
 
 /**
