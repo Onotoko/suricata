@@ -675,7 +675,7 @@ void ReceivePfringThreadExitStats(ThreadVars *tv, void *data)
     SCLogPerf("(%s) Packets %" PRIu64 ", bytes %" PRIu64 "", tv->name, ptv->pkts, ptv->bytes);
 #ifdef PF_RING_FLOW_OFFLOAD
     if (ptv->flags & PFRING_FLAGS_BYPASS) {
-      SCLogPerf("(%s) Offload: Packets %" PRIu64 "", tv->name, ptv->shunt_pkts);
+      SCLogPerf("(%s) Bypass: Packets %" PRIu64 "", tv->name, ptv->shunt_pkts);
     }
 #endif
 }
