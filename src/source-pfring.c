@@ -296,8 +296,6 @@ static int PfringBypassCallback(Packet *p)
 {
     hw_filtering_rule r;
 
-    SCLogDebug("Calling Pfring callback function");
-
     /* Only bypass TCP and UDP */
     if (!(PKT_IS_TCP(p) || PKT_IS_UDP(p))) {
         return 0;
@@ -308,13 +306,14 @@ static int PfringBypassCallback(Packet *p)
         return 0;
     }
 
-    r.rule_family_type = accolade_flow_filter_rule;
-    r.rule_family.flow_rule.rule_type = flow_drop_rule;
-    r.rule_family.flow_rule.thread = 0;
-    r.rule_family.flow_rule.flow_id = p->pfring_v.flow_id;
+    r.rule_family_type = generic_flow_id_rule;
+    r.rule_family.flow_id_rule.action = flow_drop_rule;
+    r.rule_family.flow_id_rule.thread = 0;
+    r.rule_family.flow_id_rule.flow_id = p->pfring_v.flow_id;
+
+    SCLogDebug("Bypass set for flow ID = %u", p->pfring_v.flow_id);
 
     if (pfring_add_hw_rule(p->pfring_v.ptv->pd, &r) < 0) {
-      SCLogInfo("Bypass set for flow ID = %u", p->pfring_v.flow_id);
       return 0;
     }
 
@@ -545,7 +544,7 @@ TmEcode ReceivePfringThreadInit(ThreadVars *tv, const void *initdata, void **dat
     if (pfconf->flags & PFRING_CONF_FLAGS_BYPASS) {
 #ifdef PF_RING_FLOW_OFFLOAD
         SCLogInfo("Bypass is supported by this Pfring version");
-        opflag |= PF_RING_FLOW_OFFLOAD | PF_RING_FLOW_OFFLOAD_NOUP;
+        opflag |= PF_RING_FLOW_OFFLOAD | PF_RING_FLOW_OFFLOAD_NOUPDATES;
         ptv->flags |= PFRING_FLAGS_BYPASS;
 #else
         SCLogInfo("Bypass is not supported by this Pfring version, please upgrade");
